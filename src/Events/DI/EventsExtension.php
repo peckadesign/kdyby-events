@@ -222,7 +222,13 @@ class EventsExtension extends \Nette\DI\CompilerExtension
 	private function validateSubscribers(DIContainerBuilder $builder, Definition $manager)
 	{
 		foreach ($manager->getSetup() as $stt) {
-			if ($stt->getEntity() !== 'addEventSubscriber') {
+			// Nette DI 3.1+ ukládá metodu setupu jako [@self, 'addEventSubscriber'], starší jako řetězec
+			$setupEntity = $stt->getEntity();
+			if (is_array($setupEntity) && ($setupEntity[0] ?? NULL) instanceof Reference && $setupEntity[0]->isSelf()) {
+				$setupEntity = $setupEntity[1];
+			}
+
+			if ($setupEntity !== 'addEventSubscriber') {
 				$this->allowedManagerSetup[] = $stt;
 				continue;
 			}
