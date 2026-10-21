@@ -17,7 +17,7 @@ use Kdyby\Events\EventManager;
 use Kdyby\Events\LazyEventManager;
 use Kdyby\Events\Subscriber;
 use Kdyby\Events\SymfonyDispatcher;
-use Nette\Configurator;
+use Nette\Bootstrap\Configurator;
 use Nette\DI\Compiler;
 use Nette\DI\Config\Helpers;
 use Nette\DI\Container as DIContainer;
@@ -32,7 +32,7 @@ use Nette\DI\Definitions\Statement;
 use Nette\DI\Helpers as DIHelpers;
 use Nette\PhpGenerator\ClassType as ClassTypeGenerator;
 use Nette\PhpGenerator\Helpers as GeneratorHelpers;
-use Nette\PhpGenerator\PhpLiteral;
+use Nette\PhpGenerator\Literal;
 use Nette\Utils\Validators;
 use ReflectionProperty;
 use Symfony\Component\EventDispatcher\Event as SymfonyEvent;
@@ -109,7 +109,7 @@ class EventsExtension extends \Nette\DI\CompilerExtension
 				$config['debugger'] = $config['debugger'] !== self::PANEL_COUNT_MODE;
 			}
 
-			$evm->addSetup('?::register(?, ?)->renderPanel = ?', [new PhpLiteral(Panel::class), '@self', '@container', $config['debugger']]);
+			$evm->addSetup('?::register(?, ?)->renderPanel = ?', [new Literal(Panel::class), '@self', '@container', $config['debugger']]);
 		}
 
 		if ($config['exceptionHandler'] !== NULL) {
@@ -216,13 +216,19 @@ class EventsExtension extends \Nette\DI\CompilerExtension
 
 	/**
 	 * @param \Nette\DI\ContainerBuilder $builder
-	 * @param \Nette\DI\ServiceDefinition $manager
+	 * @param \Nette\DI\Definitions\ServiceDefinition $manager
 	 * @throws \Nette\Utils\AssertionException
 	 */
 	private function validateSubscribers(DIContainerBuilder $builder, Definition $manager)
 	{
 		foreach ($manager->getSetup() as $stt) {
-			if ($stt->getEntity() !== 'addEventSubscriber') {
+			// Nette DI 3.1+ ukládá metodu setupu jako [@self, 'addEventSubscriber'], starší jako řetězec
+			$setupEntity = $stt->getEntity();
+			if (is_array($setupEntity) && ($setupEntity[0] ?? NULL) instanceof Reference && $setupEntity[0]->isSelf()) {
+				$setupEntity = $setupEntity[1];
+			}
+
+			if ($setupEntity !== 'addEventSubscriber') {
 				$this->allowedManagerSetup[] = $stt;
 				continue;
 			}
@@ -407,10 +413,24 @@ class EventsExtension extends \Nette\DI\CompilerExtension
 			}
 
 			$dispatchAnnotation = self::propertyHasAnnotation($property, 'globalDispatchFirst');
+			if ($property->hasType()) {
+				// Typed property (e.g. "public array $onSuccess" since Nette 3.2) cannot hold the Event object,
+				// so the Event is appended to the array as another callback.
+				$def->addSetup('$' . $name . '[]', [
+					new Statement($this->prefix('@manager') . '::createEvent', [
+						[$class->getName(), $name],
+						[],
+						NULL,
+						$dispatchAnnotation ?? $this->loadedConfig['globalDispatchFirst'],
+					]),
+				]);
+				continue;
+			}
+
 			$def->addSetup('$' . $name, [
 				new Statement($this->prefix('@manager') . '::createEvent', [
 					[$class->getName(), $name],
-					new PhpLiteral('$service->' . $name),
+					new Literal('$service->' . $name),
 					NULL,
 					$dispatchAnnotation ?? $this->loadedConfig['globalDispatchFirst'],
 				]),
@@ -459,7 +479,7 @@ class EventsExtension extends \Nette\DI\CompilerExtension
 
 	/**
 	 * @param string|\stdClass $statement
-	 * @return \Nette\DI\Statement[]
+	 * @return \Nette\DI\Definitions\Statement[]
 	 */
 	private function filterArgs($statement)
 	{
@@ -467,7 +487,7 @@ class EventsExtension extends \Nette\DI\CompilerExtension
 	}
 
 	/**
-	 * @param \Nette\Configurator $configurator
+	 * @param \Nette\Bootstrap\Configurator $configurator
 	 */
 	public static function register(Configurator $configurator)
 	{
